@@ -2,7 +2,6 @@
 #NoTrayIcon
 ; #Warn
 #SingleInstance Off
-Menu Tray, Icon, appwiz.cpl, -1500
 
 if !A_IsAdmin && !%False%
 {
@@ -24,14 +23,39 @@ if !A_IsAdmin && !%False%
         ExitApp
 }
 
-SourceDir := A_ScriptDirSilentMode := false
+SourceDir := A_ScriptDir
+SilentMode := false
 SilentErrors := 0
-AutoRestart := false
+
+if 0 > 0
+if 1 = /kill ; For internal use.
+{
+    DetectHiddenWindows On
+    WinKill % "ahk_id " %0%
+    ExitApp
+}
+else if 1 = /fin ; For internal use.
+{
+    DetectHiddenWindows On
+    WinKill % "ahk_id " %0%
+    WinWaitClose % "ahk_id " %0%,, 1
+    
+    exefile = %2%
+    InstallFile(exefile, "AutoHotkey.exe")
+    if 3 = 0 ; SilentMode
+        MsgBox 64, AutoHotkey Setup, The settings have been updated.
+    ExitApp
+}
+else if 1 = /runahk ; For internal use.
+{
+    RunAutoHotkey_()
+    ExitApp
+}
 
 ProductName := "AutoHotkey"
 ProductVersion := A_AhkVersion
 ProductPublisher := "Lexikos"
-ProductWebsite := "https://autohotkey.com/"
+ProductWebsite := "http://ahkscript.org/"
 
 EnvGet ProgramW6432, ProgramW6432
 DefaultPath := (ProgramW6432 ? ProgramW6432 : A_ProgramFiles) "\AutoHotkey"
@@ -45,21 +69,11 @@ AutoHotkeyKey := "SOFTWARE\AutoHotkey"
 UninstallKey := "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\AutoHotkey"
 FileTypeKey := "AutoHotkeyScript"
 
-Menu Tray, MainWindow  ; Enable debugging setup.exe.
-
-if 1 = /exec ; For internal use
-{
-    HandleExec(1)
-    ExitApp
-}
-
 DetermineVersion()
 
 Loop %0%
     if %A_Index% = /S
         SilentMode := true
-    else if %A_Index% = /R
-        AutoRestart := true
     else if %A_Index% = /U32
         DefaultType = Unicode
     else if %A_Index% in /U64,/x64
@@ -86,8 +100,9 @@ Loop %0%
         Extract(SlashD ? DefaultPath : "")
         ExitApp
     }
-    else if (SubStr(%A_Index%,1,5) = "/Test")
+    else if (SubStr(%A_Index%,1,5) = "/Test") {
         TestMode := SubStr(%A_Index%,6)
+    }
 
 if SilentMode {
     QuickInstall()
@@ -102,34 +117,27 @@ if WinExist("AutoHotkey Setup ahk_class AutoHotkeyGUI") {
 
 OnExit GuiClose
 Gui Margin, 0, 0
-Gui +LastFound
-try {  ; Hide window title.
-    DllCall("UxTheme\SetWindowThemeAttribute", "ptr", WinExist()
-        , "int", 1, "int64*", (3<<32)|3, "int", 8)
-}
+Gui Add, ActiveX, vwb w600 h400 hwndhwb, Shell.Explorer
+ComObjConnect(wb, "wb_")
 OnMessage(0x100, "gui_KeyDown", 2)
-try Gui Add, ActiveX, vwb w600 h400 hwndhwb, Shell.Explorer
 try {
     if !wb
         throw Exception("Failed to create IE control")
-    ComObjConnect(wb, "wb_")
-    if GetKeyState("Shift") || GetKeyState("Ctrl")
-        throw 1
+    if (TestMode = "FailUI")
+        throw Exception("Testing UI")
     InitUI()
 }
 catch excpt {
+    excpt := excpt.Message
     if (A_ScriptDir = DefaultPath) {
         MsgBox 0x10, AutoHotkey Setup, Setup failed to initialize its user interface and will now exit.
         ExitApp
     }
-    message := IsObject(excpt)
-        ? "Setup encountered an error.`n"
-        . "  Specifically: " excpt.Message
-        : "Setup is in troubleshooting mode (you're holding Ctrl or Shift)."
     type := DefaultType="ANSI" ? "ANSI 32-bit" : "Unicode " (DefaultType="x64"?"64":"32") "-bit"
-    MsgBox 0x33, AutoHotkey Setup,
+    MsgBox 0x13, AutoHotkey Setup,
 (
-%message%
+Setup failed to initialize its user interface.
+  Error: %excpt%
 
 Do you want to install with default options?
   %ProductName% v%ProductVersion% (%type%)
@@ -225,8 +233,7 @@ InitUI() {
         Sleep 10
     wb.Document.open()
     wb.Document.write(html)
-    wb.Document.close()    w := wb.Document.parentWindow
-    w.AHK := Func("JS_AHK")
+    wb.Document.Close()    w := wb.Document.parentWindow
     if (!CurrentType && A_ScriptDir != DefaultPath)
         CurrentName := ""  ; Avoid showing the Reinstall option since we don't know which version it was.
     w.initOptions(CurrentName, CurrentVersion, CurrentType
@@ -242,6 +249,7 @@ InitUI() {
         w.extract.style.display := "None"
         w.opt1.disabled := true
         w.opt1.firstChild.innerText := "Checking for updates..."
+        SetTimer CheckForUpdates, -500
     }
     w.installcompiler.checked := DefaultCompiler
     w.enabledragdrop.checked := DefaultDragDrop
@@ -259,25 +267,24 @@ InitUI() {
     logicalDPI := w.screen.logicalXDPI, deviceDPI := w.screen.deviceXDPI
     if (A_ScreenDPI != 96)
         w.document.body.style.zoom := A_ScreenDPI/96 * (logicalDPI/deviceDPI)
-    if (A_ScriptDir = DefaultPath)
-        CheckForUpdates()
 }
 
+CheckForUpdates:
+CheckForUpdates()
+return
 CheckForUpdates() {
     local w := getWindow(), latestVersion := ""
-    try {
-        whr := ComObjCreate("WinHttp.WinHttpRequest.5.1")
-        whr.Open("GET", "https://autohotkey.com/download/1.1/version.txt", true)
-        whr.Send()
-        whr.WaitForResponse()
-        latestVersion := whr.responseText
+    URLDownloadToFile http://l.autohotkey.net/version.txt, %A_Temp%\ahk_version.txt
+    if !ErrorLevel {
+        FileRead latestVersion, %A_Temp%\ahk_version.txt
+        FileDelete %A_Temp%\ahk_version.txt
     }
     if RegExMatch(latestVersion, "^(\d+\.){3}\d+") {
         if (latestVersion = ProductVersion)
             w.opt1.firstChild.innerText := "Reinstall (download required)"
         else
             w.opt1.firstChild.innerText := "Download v" latestVersion
-        w.opt1.onclick := Func("DownloadAHK")
+        w.opt1.href := "ahk://Download/"
         w.opt1.disabled := false
     } else
         w.opt1.innerText := "An error occurred while checking for updates."
@@ -291,8 +298,6 @@ CheckForUpdates() {
 
 gui_KeyDown(wParam, lParam, nMsg, hWnd) {
     global wb
-    if (Chr(wParam) ~= "[A-Z]" || wParam = 0x74) ; Disable Ctrl+O/L/F/N and F5.
-        return
     pipa := ComObjQuery(wb, "{00000117-0000-0000-C000-000000000046}")
     VarSetCapacity(kMsg, 48), NumPut(A_GuiY, NumPut(A_GuiX
     , NumPut(A_EventInfo, NumPut(lParam, NumPut(wParam
@@ -308,13 +313,35 @@ gui_KeyDown(wParam, lParam, nMsg, hWnd) {
 }
 
 
-/*  javascript:AHK('Func') --> Func()
+/*  ahk://Func/Param  -->  Func("Param")
  */
 
-JS_AHK(func, prms*) {
-    global wb
-    ; Stop navigation prior to calling the function, in case it uses Exit.
-    wb.Stop(),  %func%(prms*)
+wb_BeforeNavigate2(wb, url, flags, frame, postdata, headers, cancel) {
+    if !RegExMatch(url, "^ahk://(.*?)/(.*)", m)
+        return
+    static func, prms
+    func := m1
+    prms := []
+    StringReplace m2, m2, `%20, %A_Space%, All
+    Loop Parse, m2, `,
+        prms.Insert(A_LoopField)
+    ; Cancel: don't load the error page (or execute ahk://whatever
+    ; if it happens to somehow be a registered protocol).
+    NumPut(-1, ComObjValue(cancel), "short")
+    ; Call after a delay to allow navigation (this might only be
+    ; necessary if called from NavigateError; i.e. on Windows 8).
+    SetTimer wb_bn2_call, -15
+    return
+wb_bn2_call:
+    %func%(prms*)
+    func := prms := ""
+    return
+}
+
+wb_NavigateError(wb, url, frame, status, cancel) {
+    ; This might only be called on Windows 8, which skips the
+    ; BeforeNavigate2 call (because the protocol is invalid?).
+    wb_BeforeNavigate2(wb, url, 0, frame, "", "", cancel)
 }
 
 
@@ -448,30 +475,31 @@ getWindow() {
 
 ErrorExit(errMsg) {
     global
-    if !SilentMode
-        MsgBox 16, AutoHotkey Setup, %errMsg%
-    ExitApp 1
+    if SilentMode
+        ExitApp 1
+    MsgBox 16, AutoHotkey Setup, %errMsg%
+    Exit
 }
 
 CloseScriptsEtc(installdir, actionToContinue) {
     titles := ""
     DetectHiddenWindows On
-    close := [], reopen := []
+    close := []
     WinGet w, List, ahk_class AutoHotkey
     Loop % w {
         ; Exclude the install script.
         if (w%A_Index% = A_ScriptHwnd)
             continue
         ; Determine if the script actually needs to be terminated.
-        WinGet exe_path, ProcessPath, % "ahk_id " w%A_Index%
-        if (exe_path != "") {
+        WinGet exe, ProcessPath, % "ahk_id " w%A_Index%
+        if (exe != "") {
             ; Exclude external executables.
-            if InStr(exe_path, installdir "\") != 1
+            if InStr(exe, installdir "\") != 1
                 continue
             ; The main purpose of this next check is to avoid closing
             ; SciTE4AutoHotkey's toolbar, but also may be helpful for
             ; other situations.
-            exe := SubStr(exe_path, StrLen(installdir) + 2)
+            exe := SubStr(exe, StrLen(installdir) + 2)
             if !RegExMatch(exe, "i)^(AutoHotkey(A32|U32|U64)?\.exe|Compiler\\Ahk2Exe.exe)$")
                 continue
         }        
@@ -480,39 +508,18 @@ CloseScriptsEtc(installdir, actionToContinue) {
         title := RegExReplace(title, " - AutoHotkey v.*")
         titles .= "  -  " title "`n"
         close.Insert(w%A_Index%)
-        if FileExist(title)
-            reopen.Insert({path: title, exe: exe_path})
     }
     if (titles != "") {
-        global SilentMode, installInPlace
+        global SilentMode
         if !SilentMode {
-            static button_retry, button_mode
-            button_retry := 3
-            if (actionToContinue = "installation" && !installInPlace) {
-                help_text =
-                (LTrim
-                Click Reload to automatically reload the scripts later.
-                Click Close All to just close the scripts and continue.
-                )
-                button_mode := 3
-            } else {
-                help_text =
-                (LTrim
-                Click Close All to close all scripts and continue the %actionToContinue%.
-                )
-                button_mode := 1
-            }
-            SetTimer CloseScriptsEtc_Buttons, -5
-            MsgBox % 48|button_mode, AutoHotkey Setup,
+            MsgBox 49, AutoHotkey Setup,
             (LTrim
             Setup needs to close the following script(s):
             `n%titles%
-            %help_text%
+            Click OK to close these scripts and continue the %actionToContinue%.
             )
             IfMsgBox Cancel
                 Exit
-            IfMsgBox Yes
-                global AutoRestart := true
         }
         ; Close script windows (typically causing them to exit).
         Loop % close.MaxIndex()
@@ -529,40 +536,6 @@ CloseScriptsEtc(installdir, actionToContinue) {
     ; was already handled by the section above):
     GroupAdd autoclosegroup, Ahk2Exe v ahk_exe %installdir%\Compiler\Ahk2Exe.exe
     WinClose ahk_group autoclosegroup
-    return reopen
-    
-    CloseScriptsEtc_Buttons:
-    Critical
-    if !WinExist("ahk_class #32770 ahk_pid " DllCall("GetCurrentProcessId")) {
-        if (button_retry--)
-            SetTimer,, -5
-        return
-    }
-    if (button_mode = 1)
-        ControlSetText Button1, Close &All
-    else {
-        ControlSetText Button1, &Reload
-        ControlSetText Button2, Close &All
-    }
-    return
-}
-
-ReopenScripts(scripts) {
-    global AutoRestart
-    if !AutoRestart || !scripts || !scripts.MaxIndex()
-        return
-    failed := ""
-    for i, script in scripts {
-        workdir := script.path
-        SplitPath workdir,, workdir
-        try
-            script.exe ? Run_(script.exe, """" script.path """", workdir)
-                       : Run_("""" script.path """",, workdir)
-        catch
-            failed .= "`n" script
-    }
-    if (failed != "" && !SilentMode)
-        MsgBox 16, AutoHotkey Setup, Failed to restart the following scripts:`n%failed%
 }
 
 GetErrorMessage(error_code="") {
@@ -579,16 +552,15 @@ switchPage(page) {
 }
 
 UpdateStatus(status) {
-    ; ToolTip % status
     ; if !SilentMode
         ; getWindow().install_status.innerText := status
 }
 
 ShellRun(prms*)
 {
-    shellWindows := ComObjCreate("Shell.Application").Windows
-    VarSetCapacity(_hwnd, 4, 0)
-    desktop := shellWindows.FindWindowSW(0, "", 8, ComObj(0x4003, &_hwnd), 1)
+    shellWindows := ComObjCreate("{9BA05972-F6A8-11CF-A442-00A0C90A8F39}")
+    
+    desktop := shellWindows.Item(ComObj(19, 8)) ; VT_UI4, SCW_DESKTOP                
    
     ; Retrieve top-level browser object.
     if ptlb := ComObjQuery(desktop
@@ -618,11 +590,11 @@ ShellRun(prms*)
     }
 }
 
-Run_(target, args:="", workdir:="") {
+Run_(target, args="") {
     try
-        ShellRun(target, args, workdir)
+        ShellRun(target, args)
     catch e
-        Run % args="" ? target : target " " args, % workdir
+        Run % args="" ? target : target " " args
 }
 
 
@@ -658,7 +630,7 @@ ViewHelp(topic) {
     if FileExist(path)
         Run_("hh.exe", "mk:@MSITStore:" path "::" topic)
     else
-        Run_("https://autohotkey.com" topic)
+        Run_("http://ahkscript.org" topic)
 }
 
 RunAutoHotkey() {
@@ -666,9 +638,9 @@ RunAutoHotkey() {
     ; in (i.e. an admin user), so in addition to running AutoHotkey.exe
     ; in user mode, have it call the function below to ensure the script
     ; file is correctly located.
-    Run_("AutoHotkey.exe", """" A_WorkingDir "\Installer.ahk"" /exec runahk")
+    Run_("AutoHotkey.exe", """" A_WorkingDir "\Installer.ahk"" /runahk")
 }
-Exec_RunAHK() {
+RunAutoHotkey_() {
     ; This could detect %ExeDir%\AutoHotkey.ahk (which takes precedence
     ; over %A_MyDocuments%\AutoHotkey.ahk), but that file is unlikely to
     ; exist in this situation.
@@ -684,13 +656,6 @@ Exec_RunAHK() {
         Sleep 50
         Process Exist, %pid%
         if !ErrorLevel {
-            if !FileExist(script_path) {
-                WinWait AutoHotkey Help,, 1
-                if !ErrorLevel {
-                    WinActivate  ; Welcome screen (v1.1.20).
-                    return
-                }
-            }
             message =
             (LTrim Join`s
             AutoHotkey has exited.  You may need to edit your startup
@@ -722,11 +687,7 @@ Exec_RunAHK() {
     }
     MsgBox % message_flags, AutoHotkey Setup, %message%`n`nYour script is located here:`n   %script_path%`n`nDo you want to edit this file?
     IfMsgBox Yes
-    {
-        if !FileExist(script_path)
-            FileAppend,, %script_path%
         Run edit "%script_path%"
-    }
 }
 
 Quit() {
@@ -766,76 +727,9 @@ Extract(dstDir="") {
     Run %dstDir%
 }
 
-DownloadAHK() {
-    global wb
-    wb.Stop()
-    file := A_Temp "\ahk-install.exe"
-    switchPage("downloading")
-    Sleep 10
-    if !Download("https://autohotkey.com/download/ahk-install.exe", file, "DownloadAHK_Progress") {
-        MsgBox 16,, Download failed.
-        switchPage("start")
-        return
-    }
-    Run "%file%" /exec waitclose %A_ScriptHwnd% /exec downloaded "%file%"
+Download() {
+    Run http://l.autohotkey.net/AutoHotkey_L_Install.exe
     ExitApp
-}
-Exec_WaitClose(hwnd) {
-    DetectHiddenWindows On
-    WinWaitClose ahk_id %hwnd%
-}
-Exec_Downloaded(file) {
-    ; global SilentMode := true
-    DetermineVersion()
-    QuickInstall()
-    ; NOTE: .\ is required here.  Otherwise it launches the copy found
-    ; in the directory containing the current module -- the temp dir.
-    Run .\AutoHotkeyU32.exe Installer.ahk /exec cleanup "%file%"
-}
-Exec_Cleanup(file) {
-    SplitPath file, name
-    Process WaitClose, %name%
-    MsgBox 64, AutoHotkey Setup, Installation complete.
-    FileDelete %file%
-}
-DownloadAHK_Progress(n, nMax) {
-    if !nMax
-        return
-    w := getWindow()
-    w.document.getElementById("dl_progress")
-        .style.width := (n*100/nMax) "%"
-    w.document.getElementById("dl_text")
-        .innerText := DownloadSize(n) " / " DownloadSize(nMax)
-    Sleep 10
-}
-DownloadSize(n) {
-    n /= 1024
-    if (n > 1024)
-        return Round(n/1024, 2) " MB"
-    return Round(n, 2) " KB"
-}
-
-; Based on code by Sean and SKAN @ http://www.autohotkey.com/forum/viewtopic.php?p=184468#184468
-Download(url, file, callback) {
-    static vt
-    if !VarSetCapacity(vt) {
-        VarSetCapacity(vt, A_PtrSize*11), nPar := "31132253353"
-        Loop Parse, nPar
-            NumPut(RegisterCallback("DL_Progress", "F", A_LoopField, A_Index-1), vt, A_PtrSize*(A_Index-1))
-    }
-    if !(IsObject(callback) || (callback := Func(callback)))
-        return !(ErrorLevel := 1)
-    VarSetCapacity(bobj, A_PtrSize*2), NumPut(&callback, NumPut(&vt, bobj)), VarSetCapacity(tn, 520)
-    if (0 = DllCall("urlmon\URLDownloadToCacheFile", "ptr", 0, "str", url, "str", tn, "uint", 260, "uint", 0x10, "ptr", &bobj))
-        FileCopy %tn%, %file%, 1
-    else
-        ErrorLevel := 1
-    return !ErrorLevel
-}
-DL_Progress( pthis, nP=0, nPMax=0, nSC=0, pST=0 ) {
-    if A_EventInfo = 6
-        fn := Object(NumGet(pthis+A_PtrSize)), %fn%(np, npMax)
-    return 0
 }
 
 
@@ -963,7 +857,7 @@ Uninstall() {
     ; an arbitrary wait (e.g. by calling "ping").
     Run %ComSpec% /c "
     (Join`s&`s
-    AutoHotkey.exe "%A_ScriptFullPath%" /exec kill %A_ScriptHwnd%
+    AutoHotkey.exe "%A_ScriptFullPath%" /kill %A_ScriptHwnd%
     del Installer.ahk
     del AutoHotkey.exe
     cd %A_Temp%
@@ -1000,22 +894,17 @@ _Install(opt) {
         catch
             ErrorExit("Unable to create installation directory ('" opt.path "')")
     
+    CloseScriptsEtc(CurrentPath, "installation")
+    
     /*  Preparation
      */
     
     SetWorkingDir % opt.path
     
-    ; If the following is "true", we have no source files to install,
-    ; but we may have settings to change.  This includes replacing the
-    ; binary files with %exefile% and %binfile%.
-    installInPlace := (A_WorkingDir = A_ScriptDir)
-    
-    reopen := CloseScriptsEtc(CurrentPath, "installation")
-    
     switchPage("wait")
     
     ; Remove old files which are no longer relevant.
-    if (CurrentVersion <= "1.0.48.05") {
+    if (CurrentName = "AutoHotkey") {
         FileDelete Compiler\README.txt
         FileDelete Compiler\upx.exe
     }
@@ -1039,6 +928,11 @@ _Install(opt) {
      */
     
     UpdateStatus("Copying files")
+    
+    ; If the following is "true", we have no source files to install,
+    ; but we may have settings to change.  This includes replacing the
+    ; binary files with %exefile% and %binfile%.
+    installInPlace := (A_WorkingDir = A_ScriptDir)
     
     ; Install all unique files.
     if !installInPlace {
@@ -1071,8 +965,7 @@ _Install(opt) {
         local smpath := A_ProgramsCommon "\" opt.menu
         FileCreateDir %smpath%
         FileCreateShortcut %A_WorkingDir%\AutoHotkey.exe, %smpath%\AutoHotkey.lnk
-        FileDelete %smpath%\AutoIt3 Window Spy.lnk
-        FileCreateShortcut %A_WorkingDir%\AU3_Spy.exe, %smpath%\Active Window Info (Window Spy).lnk
+        FileCreateShortcut %A_WorkingDir%\AU3_Spy.exe, %smpath%\AutoIt3 Window Spy.lnk
         FileCreateShortcut %A_WorkingDir%\AutoHotkey.chm, %smpath%\AutoHotkey Help File.lnk
         IniWrite %ProductWebsite%, %ProductName% Website.url, InternetShortcut, URL
         FileCreateShortcut %A_WorkingDir%\%ProductName% Website.url, %smpath%\Website.lnk
@@ -1164,18 +1057,12 @@ _Install(opt) {
     ; This may be necessary to update the icon when upgrading from an older version of AHK.
     DllCall("shell32\SHChangeNotify", "uint", 0x08000000, "uint", 0, "int", 0, "int", 0) ; SHCNE_ASSOCCHANGED
     
-    UpdateStatus("")
-    
     if installInPlace {
         ; As AutoHotkey.exe is probably in use by this script, the final
         ; step will be completed by another instance of this script:
-        Run .\AutoHotkeyU32.exe "%A_ScriptFullPath%"
-                /exec kill %A_ScriptHwnd%
-                /exec setExe %exefile% %SilentMode%
+        Run AutoHotkeyU32.exe "%A_ScriptFullPath%" /fin %exefile% %A_ScriptHwnd% %SilentMode%
         ExitApp
     }
-    
-    ReopenScripts(reopen)
     
     switchPage("done")
 }
@@ -1249,35 +1136,6 @@ RemoveCompiler() {
     FileDelete Compiler\AutoHotkeySC.bin
     FileRemoveDir Compiler  ; Only if empty.    
     RegDelete HKLM, SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Ahk2Exe.exe
-}
-
-HandleExec(n) {
-    Loop {
-        ++n, fn := Func("Exec_" %n%), args := []
-        Loop % %false% - n {
-            ++n, v := %n%
-            if v = /exec
-                break
-            args.Insert(v)
-        }
-        c := Round(args.MaxIndex())
-        if !fn || c < fn.MinParams || c > fn.MaxParams
-            ErrorExit("Internal: bad /exec")
-        %fn%(args*)
-    }
-    until v != "/exec"
-}
-
-Exec_Kill(id) {
-    DetectHiddenWindows On
-    WinKill ahk_id %id%
-    WinWaitClose ahk_id %id%,, 10
-}
-
-Exec_SetExe(exefile, SilentMode := false) {
-    InstallFile(exefile, "AutoHotkey.exe")
-    if !SilentMode
-        MsgBox 64, AutoHotkey Setup, The settings have been updated.
 }
 DefineUI:
 html=
@@ -1292,7 +1150,6 @@ body {
 	cursor: default;
 	padding: 0;
 	margin: 0;
-	border: none;
 }
 h1 {
 	font-size: 37px;
@@ -1442,27 +1299,6 @@ label p {
 	display: none;
 	font-weight: bold;
 }
-#dl_container {
-	position: absolute;
-	left: 12%;
-	top: 50%;
-	width: 80%;
-	height: 1em;
-	background-color: white;
-	border: 1px solid #405871;
-}
-#dl_progress {
-	width: 0;
-	height: 100%;
-	background-color: #405871;
-}
-#dl_text {
-	position: absolute;
-	left: 12%;
-	top: 60%;
-	width: 80%;
-	text-align: center;
-}
 </style>
 <script type="text/javascript">
 function forEach(arr, fn) {
@@ -1503,37 +1339,37 @@ function initOptions(curName, curVer, curType, newVer, instDir, smFolder, defTyp
 		var uniType = is64 ? "x64" : "Unicode";
 		var uniTypeName = types[uniType];
 		opt = [
-			"AHK('Upgrade', 'ANSI')", "Upgrade to v" + newVer + " (" + types.ANSI + ")", "Recommended for compatibility.",
-			"AHK('Upgrade', '" + uniType + "')", "Upgrade to v" + newVer + " (" + uniTypeName + ")", "",
-			"AHK('Customize')", "Custom Installation", ""
+			"ahk://Upgrade/ANSI", "Upgrade to v" + newVer + " (" + types.ANSI + ")", "Recommended for compatibility.",
+			"ahk://Upgrade/" + uniType, "Upgrade to v" + newVer + " (" + uniTypeName + ")", "",
+			"ahk://Customize/", "Custom Installation", ""
 		];
-		warn = '<strong>Note:</strong> Some AutoHotkey 1.0 scripts are <a href="#" onclick="'+"AHK('ViewHelp', '/docs/Compat.htm'); return false"+'">not compatible</a> with AutoHotkey 1.1.';
+		warn = '<strong>Note:</strong> Some AutoHotkey 1.0 scripts are <a href="ahk://ViewHelp//docs/Compat.htm">not compatible</a> with AutoHotkey 1.1.';
 	} else if (curName == "") {
 		start_intro.innerText = "Please select the type of installation you wish to perform.";
 		opt = [
-			"AHK('QuickInstall')", "Express Installation", "Default version: " + defTypeName + "<br>Install in: " + instDir,
-			"AHK('Customize')", "Custom Installation", ""
+			"ahk://QuickInstall/", "Express Installation", "Default version: " + defTypeName + "<br>Install in: " + instDir,
+			"ahk://Customize/", "Custom Installation", ""
 		];
 	} else if (curVer != newVer) {
 		start_intro.innerText = curName + " v" + curVer + curTypeName + " is installed. What do you want to do?";
 		opt = [
-			"AHK('Upgrade', '" + defType + "')", (curVer < newVer ? "Upgrade" : "Downgrade") + " to v" + newVer + " (" + defTypeName + ")", "",
-			"AHK('Customize')", "Custom Installation", ""
+			"ahk://Upgrade/" + defType, (curVer < newVer ? "Upgrade" : "Downgrade") + " to v" + newVer + " (" + defTypeName + ")", "",
+			"ahk://Customize/", "Custom Installation", ""
 		];
 	} else {
 		start_intro.innerText = curName + " v" + curVer + curTypeName + " is installed. What do you want to do?";
 		opt = [
-			"AHK('QuickInstall')", "Repair", "",
-			"AHK('Customize')", "Modify", "",
-			"AHK('Uninstall')", "Uninstall", ""
+			"ahk://QuickInstall/", "Repair", "",
+			"ahk://Customize/", "Modify", "",
+			"ahk://Uninstall/", "Uninstall", ""
 		];
 	}
 	var i, html = [];
 	for (i = 0; i < opt.length; i += 3) {
-		html.push('<a href="#" onclick="', opt[i], '; return false" id="opt', Math.floor(i/3)+1, '"><span>', opt[i+1], '</span>');
+		html.push('<a href="', opt[i], '" id="opt', Math.floor(i/3)+1, '"><span>', opt[i+1], '</span>');
 		if (opt[i+2])
 			html.push('<p>', opt[i+2], '</p>');
-		if (opt[i] == "AHK('Customize')")
+		if (opt[i] == 'ahk://Customize/')
 			html.push('<div class="marker">\u00BB</div>');
 		html.push('</a>');
 	}
@@ -1586,10 +1422,9 @@ function switchPage(page) {
 	}
 	return false;
 }
-function customInstall() {
+function beforeCustomInstall() {
 	if (startmenu.style.color == '#888')
 		startmenu.value = '';
-	return AHK('CustomInstall');
 }</script>
 </head><body>
 
@@ -1599,8 +1434,8 @@ function customInstall() {
 	<p id="start_intro"></p>
 	<div class="warning" id="start_warning"></div>
 	<div class="options" id="start_options"></div>
-	<div id="license">AutoHotkey is open source software: <a href="#" onclick="AHK('ReadLicense'); return false">read license</a></div>
-	<div id="extract"><a href="#" onclick="AHK('Extract'); return false" title="Save program files without installing.">extract to...</a></div>
+	<div id="license">AutoHotkey is open source software: <a href="ahk://ReadLicense/">read license</a></div>
+  <div id="extract"><a href="ahk://Extract/" title="Save program files without installing.">extract to...</a></div>
 </div>
 
 <div class="page" id="custom-install">
@@ -1612,7 +1447,7 @@ function customInstall() {
 			<a href="#ci_location">location</a> &#187;
 			<a href="#ci_options">options</a> &#187;
 		</span>
-		<a id="ci_nav_install" href="#" onclick="customInstall(); return false">install</a>
+		<a id="ci_nav_install" href="ahk://CustomInstall/" onclick="beforeCustomInstall()">install</a>
 	</div>
 	<div class="pager" id="ci_pager">
 		<div class="page" id="ci_version">
@@ -1629,7 +1464,7 @@ function customInstall() {
 		</div>
 		<div class="page" id="ci_location">
 			<label for="installdir" class="indent">Install location:<br>
-			<input type="text" class="textbox" id="installdir" value="C:\Program Files\AutoHotkey" tabindex="11"> <a href="#" onclick="AHK('SelectFolder', 'installdir', 'Select the folder to install AutoHotkey in.'); return false" id="installdir_browse" class="button" tabindex="12">Browse</a></label><br>
+			<input type="text" class="textbox" id="installdir" value="C:\Program Files\AutoHotkey" tabindex="11"> <a href="ahk://SelectFolder/installdir,Select the folder to install AutoHotkey in." id="installdir_browse" class="button" tabindex="12">Browse</a></label><br>
 			<label for="startmenu" class="indent"> Create shortcuts in the following Start menu folder:<br>
 			<input type="text" class="textbox" id="startmenu" value="AutoHotkey" tabindex="13"
 				onfocus="if (style.color == '#888') value='', style.color = '';"
@@ -1648,7 +1483,7 @@ function customInstall() {
 				<p>Files dropped onto a .ahk script will launch that script (the files will be passed as parameters).  This can lead to accidental launching so some users may wish to disable it.</p></label>
 			<label for="separatebuttons"><input type="checkbox" id="separatebuttons"> Separate taskbar buttons
 				<p>Causes each script which has visible windows to be treated as a separate program, but prevents AutoHotkey.exe from being pinned to the taskbar.</p></label>
-			<a href="#" onclick="customInstall(); return false" id="install_button" class="button">Install</a>
+			<a href="ahk://CustomInstall/" onclick="beforeCustomInstall()" id="install_button" class="button">Install</a>
 		</div>
 	</div>
 </div>
@@ -1665,18 +1500,12 @@ function customInstall() {
 	<div class="nav">&nbsp;</div>
 	<p>Installation complete.</p>
 	<div class="options">
-		<a href="#" onclick="AHK('ViewHelp', '/docs/AHKL_ChangeLog.htm'); return false">View Changes &amp; New Features</a>
-		<a href="#" onclick="AHK('ViewHelp', '/docs/Tutorial.htm'); return false">View the Tutorial</a>
-		<a href="#" onclick="AHK('RunAutoHotkey'); return false">Run AutoHotkey</a>
-		<a href="#" onclick="AHK('Quit'); return false" id="done_exit">Exit</a>
+		<a href="ahk://ViewHelp//docs/AHKL_ChangeLog.htm">View Changes &amp; New Features</a>
+		<a href="ahk://ViewHelp//docs/Tutorial.htm">View the Tutorial</a>
+		<a href="ahk://RunAutoHotkey/">Run AutoHotkey</a>
+		<a href="ahk://Quit/" id="done_exit">Exit</a>
 	</div>
-</div>
-
-<div class="page" id="downloading">
-	<h1>AutoHotkey Setup</h1>
-	<div class="nav">&nbsp;</div>
-	<div id="dl_container"><div id="dl_progress"></div></div>
-	<div id="dl_text">Connecting...</div>
+    <p>Did you know AutoHotkey has a <a href="ahk://ViewWebsite/">new home</a>?</p>
 </div>
 
 </body></html>

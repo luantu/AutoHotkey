@@ -37,90 +37,6 @@ showTips(var_string)
 	;SplashTextOff
 }
 
-;获取当前输入法状态
-IMEStatusGet() {
-	global isCurrentEnglish
-	CoordMode Pixel  ; 将下面的坐标解释为相对于屏幕而不是活动窗口.
-	ImageSearch, FoundX, FoundY, 1400, 800, A_ScreenWidth, A_ScreenHeight, D:\Program Files\AutoHotkey\Chinese.bmp
-	if (ErrorLevel = 0) {
-		;MsgBox ,"当前输入法为中文"
-		isCurrentEnglish = 0
-	} else if (ErrorLevel = 1) {
-		isCurrentEnglish = 1
-		;MsgBox ,"当前输入法为英文"
-	} else {
-		;isCurrentEnglish = 1
-		;MsgBox ,"获取输入状态失败"
-		return
-	}
-}
-
-setChineseLayout(){
-	global isCurrentEnglish
-	if (isCurrentEnglish == 1) {
-		;发送中文输入法切换快捷键，请根据实际情况设置。
-		SetKeyDelay, 10
-		send {Ctrl Down}{Space}
-		send {Ctrl Up}
-		;CoordMode Mouse, Screen 
-		;Send {Click 1504, 881}  
-		isCurrentEnglish = 0
-		showTips("已经自动切换到中文输入法")
-	}
-}
-setEnglishLayout(){
-	global isCurrentEnglish
-	if (isCurrentEnglish == 0) {
-		;发送英文输入法切换快捷键，请根据实际情况设置。
-		SetKeyDelay, 10
-		send {Ctrl Down}{Space}
-		send {Ctrl Up}
-		isCurrentEnglish = 1
-		showTips("已经自动切换到英文输入法")
-	}
-}
-
-sendbyclip(var_string) {
-	ClipboardOld = %ClipboardAll%
-	Clipboard =%var_string%
-	sleep 100
-	send ^v
-	sleep 100
-	Clipboard = %ClipboardOld%	; Restore previous contents of clipboard.
-}
-
-;监控消息回调ShellMessage，并自动设置输入法
-;Gui +LastFound
-;hWnd := WinExist()
-;DllCall( "RegisterShellHookWindow", UInt,hWnd )
-;MsgNum := DllCall( "RegisterWindowMessage", Str,"SHELLHOOK" )
-;OnMessage( MsgNum, "ShellMessage")
-
-ShellMessage( wParam,lParam ) {
-	;if (wParam = 1) {
-		;WinGetclass, WinClass, ahk_id %lParam%
-		;Sleep, 1000
-		;MsgBox,%Winclass%
-		;WinActivate,ahk_class %Winclass%
-		;WinGetActiveTitle, Title
-		;MsgBox, The active window is "%Title%".
-		
-		IfWinActive,ahk_group en
-		{
-			IMEStatusGet()
-			setEnglishLayout()
-			return
-		}
-		
-		IfWinActive,ahk_group cn
-		{
-			IMEStatusGet()
-			setChineseLayout()
-			return
-		}
-	;}
-}
-
 #h::FileRecycleEmpty
 
 #x::
@@ -152,16 +68,14 @@ Return
 ;运行gitBash
 
 #g::
-IfWinNotExist  ahk_exe sh.exe
-	;Run "D:\Program Files (x86)\Git\bin\sh.exe" --login -i, F:/projects/, Max
-	Run "D:\Program Files (x86)\Git\git-bash.exe", F:/projects/, Max
+IfWinNotExist ahk_exe ConEmu.exe
+	Run "D:\cmder\Cmder.exe", , Max
 Else 
-IfWinNotActive ahk_exe sh.exe
+IfWinNotActive ahk_exe ConEmu.exe
 	WinActivate 
 Else 
 	WinMinimize 
-Return 
-
+Return
 
 ; 开启为知笔记，如果已经开启，激活窗口
 #w::
@@ -220,26 +134,10 @@ return
 
 ; SVN提交
 #c::
-if WinActive("Total Commander")	
+if WinActive("Total Commander")
 {
-	try {
-		Send {F12}
-		current_path = %clipboard%
-		;isDirSvnOrGit(current_path)
-		Run "D:\Program Files\TortoiseSVN\bin\TortoiseProc.exe" /command:commit /path:"%current_path%" /closeonend:3
-	} catch {
-		return
-	}
-	
-	WinWait ,,Commit, 
-	WinActivate 
-}
-Else
-IfWinActive ahk_class CabinetWClass
-{
-   WinGetActiveTitle, pth
-   cmd = D:\Program Files\TortoiseSVN\bin\TortoiseProc.exe /command:commit /path:"%pth%" /logmsg:"Autoversioning commit" /notempfile /closeonend:3
-   run, %cmd%, %pth%
+    Send {F12}
+    Run "D:\Program Files\TortoiseSVN\bin\TortoiseProc.exe" /command:commit /path:"%clipboard%"
 }
 Return
 
